@@ -13,11 +13,15 @@ define('NUM_7' , '7');
 define('NUM_8' , '8');
 define('NUM_9' , '9');
 define('NUM_10' , '10');
+define('NUM_15' , '15');
 define('NUM_2000' , '2000');
 
 
 define('op_update', 'Update');
+define('op_delete', 'Delete');
+
 define('UPC', 'UPC');
+define('ASIN', 'ASIN');
 define('unMedida_IN', 'IN');
 define('unMedida_FT', 'FT');
 define('unPeso_KG', 'KG');

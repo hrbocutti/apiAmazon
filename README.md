@@ -1,2 +1,0 @@
-# apiAmazon
-Integração Api amazon

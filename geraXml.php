@@ -1,19 +1,22 @@
 <?php
 
+include_once("envioEmail.php");
+include_once("MarketplaceWebService/Samples/GetFeedSubmissionResultSample.php");
+
+include_once('MarketplaceWebService/Samples/SubmitFeedSample.php');
+include_once('helper/constantes.php');
+require_once('../app/Mage.php');
+umask(0);
+Mage::app();
+
 /**
 * Gera XML apartir da lista de produtos do magento
 * @return XML com os produtos gerados.
 */
 class GeraXML
 {
-	
-	public function geraProduto()
-	{	
-		include_once('MarketplaceWebService/Samples/SubmitFeedSample.php');
-		include_once('helper/constantes.php');
-		require_once('../ma/app/Mage.php');
-		umask(0);
-		Mage::app();
+	function geraProduto($skuPost)
+	{
 
 		$doc = new DomDocument('1.0' , 'utf-8');
 		$doc->formatOutput = true;
@@ -43,262 +46,395 @@ class GeraXML
 		#############################################################
 		# Definindo uma colletions para pesquisa de produto MAGENTO #
 		#############################################################
-		$collection = Mage::getModel('catalog/product')
+
+		//$productSkuString = 'TD920309-01L';
+		$date = now('Y-m-d 00:00:00');
+		if($skuPost != ''){
+			$collection = Mage::getModel('catalog/product')
 			->getCollection()
 			->addAttributeToSort('created_at', 'DESC')
-			->addAttributeToSelect('*')->setPageSize(100);
-		$collection->getSelect();
-		//$collection->load();
-		
-		if ($collection->getSize() >= 0) {
-		
-		$indice = 0;
-		for ($i=1; $i <= $collection->getLastPageNumber(); $i++) {
-			if ($collection->isLoaded()) {
-				$collection->clear();
-				$collection->setPage($i);
-				$collection->setPageSize(100);
+			//->addAttributeToFilter('updated_at',array('gteq' => $date))
+			->addAttributeToFilter('sku', array( 'in' => $skuPost))
+			->addAttributeToFilter('amazon_feed' , '1')
+			->addAttributeToFilter('status' , '1')
+			->addAttributeToSelect('*')->setPageSize(10000);
+			$collection->getSelect();
+
+			$indice = 0;
+			for ($i=1; $i <= $collection->getLastPageNumber(); $i++) {
+				if ($collection->isLoaded()) {
+					$collection->clear();
+					$collection->setPage($i);
+					$collection->setPageSize(10000);
+				}
+
+				foreach ($collection as $product) {
+					$indice++; //Contador
+					//Recebe os produtos
+					$sku  		  = $product->getSku();
+					$printsku = $sku .',';
+					//titulo do produto -> maximo 100 caracteres
+					$name         = str_replace('&', '&amp;', $product->getData('name'));
+					$condition    = $product->getAttributeText('condition');
+					$price 		  = str_replace(',', '',$product->getPrice());
+					$explodeDesc  = explode('.', $product->getData('short_description'));
+					$description  = substr( $explodeDesc[0] . $explodeDesc[1], 0, 2000);
+
+					//Remove html Special Character
+					$Content = preg_replace("/&#?[a-z0-9]{2,8};/i","",$description);
+					$res 		  = str_replace("&", " ", strip_tags($Content));
+
+					$upc 		  = $product->getUpc();
+					$brand     	  = $product->getAttributeText('manufacturer');
+					$manufacturer = $brand;
+					$mfrPartNum   = $product->getData('part_number');
+
+					//Dimensões do produto
+					$length_Prod = number_format($product->getLength(),2);
+					$width_Prod  = number_format($product->getWidth(),2);
+					$height_Prod = number_format($product->getHeight(),2);
+					$weight_Prod = number_format($product->getWeight(),2);
+
+					//Dimensões de Embalagem
+					$length_Pack = $length_Prod;
+					$width_Pack  = $width_Prod;
+					$height_Pack = $height_Prod;
+					$weight_Pack = $weight_Prod;
+
+					$msrp 		 = str_replace(',', '',number_format($product->getMsrp(),2));
+
+
+					//Inicio Varias Mensagem ( amazon feed )
+					$Message = new DOMElement('Message');
+					$root->appendChild($Message);
+
+					$MessageID = new DOMElement('MessageID',$indice);
+					$Message->appendChild($MessageID);
+					$OperationType = new DOMElement('OperationType', op_update);
+					$Message->appendChild($OperationType);
+					$Product = new DOMElement('Product');
+					$Message->appendChild($Product);
+
+					$Sku = new DOMElement('SKU', $sku);
+					$Product->appendChild($Sku);
+
+					$StandardProductID = new DOMElement('StandardProductID');
+					$Product->appendChild($StandardProductID);
+
+					$asin = $product->getAsin();
+
+					if ($asin != '') {
+						$Type = new DOMElement('Type', ASIN);
+						$StandardProductID->appendChild($Type);
+
+						$Value = new DOMElement('Value', $asin);
+						$StandardProductID->appendChild($Value);
+					}else{
+						$Type = new DOMElement('Type', UPC);
+						$StandardProductID->appendChild($Type);
+
+						$Value = new DOMElement('Value', $upc);
+						$StandardProductID->appendChild($Value);
+					}
+
+					$Condition = new DOMElement('Condition');
+					$Product->appendChild($Condition);
+
+					$itemPackageQuant = $product->getData('item_package_quantity');
+					if ($itemPackageQuant != '') {
+
+						$NumberOfItems = new DOMElement('NumberOfItems', $itemPackageQuant);
+						$Product->appendChild($NumberOfItems);
+					}
+
+					$ConditionType = new DOMElement('ConditionType', $condition);
+					$Condition->appendChild($ConditionType);
+
+					$DescriptionData = new DOMElement('DescriptionData');
+					$Product->appendChild($DescriptionData);
+
+					$Title = new DOMElement('Title', $name);
+					$DescriptionData->appendChild($Title);
+
+					$Brand = new DOMElement('Brand', $brand);
+					$DescriptionData->appendChild($Brand);
+
+					$Description = new DOMElement('Description' , $res);
+					$DescriptionData->appendChild($Description);
+
+					$ItemDimensions = new DOMElement('ItemDimensions');
+					$DescriptionData->appendChild($ItemDimensions);
+
+					//Definindo unidade de Medidas e Peso.
+					$Length = new DOMElement('Length' , $length_Prod);
+					$ItemDimensions->appendChild($Length);
+					$Length->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Width = new DOMElement('Width' , $width_Prod);
+					$ItemDimensions->appendChild($Width);
+					$Width->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Height = new DOMElement('Height' , $height_Prod);
+					$ItemDimensions->appendChild($Height);
+					$Height->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Weight = new DOMElement('Weight' , $weight_Prod);
+					$ItemDimensions->appendChild($Weight);
+					$Weight->setAttribute('unitOfMeasure', unPeso_LB);
+
+
+					$PackageDimensions = new DOMElement('PackageDimensions');
+					$DescriptionData->appendChild($PackageDimensions);
+
+					//Definindo unidade de Medidas e Peso.
+					$Length = new DOMElement('Length' , $length_Pack);
+					$PackageDimensions->appendChild($Length);
+					$Length->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Width = new DOMElement('Width' , $width_Pack);
+					$PackageDimensions->appendChild($Width);
+					$Width->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Height = new DOMElement('Height' , $height_Pack);
+					$PackageDimensions->appendChild($Height);
+					$Height->setAttribute('unitOfMeasure', unMedida_IN);
+
+
+					$ShippingWeight = new DOMElement('ShippingWeight' , $weight_Pack);
+					$DescriptionData->appendChild($ShippingWeight);
+					$ShippingWeight->setAttribute('unitOfMeasure', unPeso_LB);
+
+					$MSRP = new DOMElement('MSRP' , $msrp);
+					$DescriptionData->appendChild($MSRP);
+					$MSRP->setAttribute('currency', unMoeda_USD);
+
+					$Manufacturer = new DOMElement('Manufacturer' , $manufacturer);
+					$DescriptionData->appendChild($Manufacturer);
+
+					$MfrPartNumber = new DOMElement('MfrPartNumber' , $mfrPartNum);
+					$DescriptionData->appendChild($MfrPartNumber);
+
+					$catgory = Mage::getModel('catalog/product')->load($product->getId());
+					$catName = '';
+					$catgory = $product->getCategoryIds();
+					foreach ($catgory as $category_id) {
+						$_cat = Mage::getModel('catalog/category')->load($category_id) ;
+						$catName = $_cat->getData('amazon_category');
+					}
+
+					$catUltima = explode('>', $catName);
+
+					$contCat = 0;
+					foreach ($catUltima as $categories){
+						$contCat++;
+					}
+					$ItemType = new DOMElement('ItemType', $catUltima[$contCat -  NUM_1]);
+					$DescriptionData->appendChild($ItemType);
+					//die(var_dump($catUltima[$contCat -  NUM_1]));
+				}
 			}
 
-			foreach ($collection as $product) {
-			$indice++; //Contador
+		}else{
+			$collection = Mage::getModel('catalog/product')
+			->getCollection()
+			->addAttributeToSort('created_at', 'DESC')
+			->addAttributeToFilter('updated_at',array('gteq' => $date))
+			->addAttributeToFilter('amazon_feed' , '1')
+			->addAttributeToFilter('status' , '1')
+			->addAttributeToSelect('*')->setPageSize(10000);
+			$collection->getSelect();
 
-			//Recebe os produtos 
-			$sku  		  = $product->getSku();
-			//titulo do produto -> maximo 100 caracteres
-			$title 		  = substr($product->getName(), NUM_0, NUM_100);
-			$name         = str_replace('&', '&amp;', strip_tags($title));
-			$condition    = $product->getAttributeText('condition');
-			$price 		  = $product->getPrice();
-			$description  = substr($product->getData('description'), NUM_0, NUM_2000);
-			/*
-			$res 		  = str_replace('&', '&amp;', strip_tags($description));
-			$shortDesc    = $product->getShortDescription();
+			$indice = 0;
+			for ($i=1; $i <= $collection->getLastPageNumber(); $i++) {
+				if ($collection->isLoaded()) {
+					$collection->clear();
+					$collection->setPage($i);
+					$collection->setPageSize(10000);
+				}
 
-			$catgory      = $product->getAttributeText('cat_amazon');
-			$catConv 	  = str_replace('&', '&amp;', $catgory);
-			$catExplode   = explode('>', $catConv);
-			
-			$upc 		  = $product->getUpc();
-			$brand     	  = $product->getAttributeText('manufacturer');
-			$manufacturer = $brand;
-			$mfrPartNum   = $product->getData('part_number');
+				foreach ($collection as $product) {
+					$indice++; //Contador
+					//Recebe os produtos
+					$sku  		  = $product->getSku();
+					$printsku = $sku .',';
+					//titulo do produto -> maximo 100 caracteres
+					$name         = str_replace('&', '&amp;', $product->getData('name'));
+					$condition    = $product->getAttributeText('condition');
+					$price 		  = str_replace(',', '',$product->getPrice());
+					$explodeDesc  = explode('.', $product->getData('short_description'));
+					$description  = substr( $explodeDesc[0] . $explodeDesc[1], 0, 2000);
 
-			//Dimensões do produto
-			$length_Prod = number_format($product->getLength(),2);
-			$width_Prod  = number_format($product->getWidth(),2);
-			$height_Prod = number_format($product->getHeight(),2);
-			$weight_Prod = number_format($product->getWeight(),2);
+					//Remove html Special Character
+					$Content = preg_replace("/&#?[a-z0-9]{2,8};/i","",$description);
+					$res 		  = str_replace("&", " ", strip_tags($Content));
 
-			//Dimensões de Embalagem
-			$length_Pack = $length_Prod;
-			$width_Pack  = $width_Prod; 
-			$height_Pack = $height_Prod;
-			$weight_Pack = $weight_Prod;
+					$upc 		  = $product->getUpc();
+					$brand     	  = $product->getAttributeText('manufacturer');
+					$manufacturer = $brand;
+					$mfrPartNum   = $product->getData('part_number');
 
-			$searchTerms = $product->getData('meta_keyword');
+					//Dimensões do produto
+					$length_Prod = number_format($product->getLength(),2);
+					$width_Prod  = number_format($product->getWidth(),2);
+					$height_Prod = number_format($product->getHeight(),2);
+					$weight_Prod = number_format($product->getWeight(),2);
 
-			$msrp 		 = number_format($product->getMsrp(),2);
+					//Dimensões de Embalagem
+					$length_Pack = $length_Prod;
+					$width_Pack  = $width_Prod;
+					$height_Pack = $height_Prod;
+					$weight_Pack = $weight_Prod;
 
-			*/
-
-			//Inicio Varias Mensagem ( amazon feed )
-			$Message = new DOMElement('Message');
-			$root->appendChild($Message);
-			
-			$MessageID = new DOMElement('MessageID',$indice);
-			$Message->appendChild($MessageID);
-			$OperationType = new DOMElement('OperationType', op_update);
-			$Message->appendChild($OperationType);
-			$Product = new DOMElement('Product');
-			$Message->appendChild($Product);
-
-			$Sku = new DOMElement('SKU', $sku);
-			$Product->appendChild($Sku);
-			
-			$StandardProductID = new DOMElement('StandardProductID');
-			$Product->appendChild($StandardProductID);
-
-			$Type = new DOMElement('Type', UPC);
-			$StandardProductID->appendChild($Type);
-
-			$Value = new DOMElement('Value', $upc);
-			$StandardProductID->appendChild($Value);
-
-			//$ProductTaxCode = new DOMElement('ProductTaxCode');
-			//$Product->appendChild($ProductTaxCode);
-
-			//$LaunchDate = new DOMElement('LaunchDate');
-			//$Product->appendChild($LaunchDate);
-
-			$Condition = new DOMElement('Condition');
-			$Product->appendChild($Condition);
-
-			$ConditionType = new DOMElement('ConditionType', $condition);
-			$Condition->appendChild($ConditionType);
-
-			$DescriptionData = new DOMElement('DescriptionData');
-			$Product->appendChild($DescriptionData);
-			
-			$Title = new DOMElement('Title', $name);
-			$DescriptionData->appendChild($Title);
-
-			$Brand = new DOMElement('Brand', $brand);
-			$DescriptionData->appendChild($Brand);
-
-			$Description = new DOMElement('Description' , $res);			
-			$DescriptionData->appendChild($Description);
-
-			/*
-			$BulletPoint = new DOMElement('BulletPoint' , $shortDesc);
-			$DescriptionData->appendChild($BulletPoint);
-			*/
-
-			
-			
-			/**
-			* @todo Pegar categoria mapeada no magento para o marketplace especifico 
-			*/
-
-			/*
-			foreach ($cats as $category_id) {
-				$_cat = Mage::getModel('catalog/category')->setStoreId(Mage::app()
-					->getStore()
-					->getId())
-				->load($category_id);
-			    $category = $_cat->getName();
-			    
-			    $ItemType = new DOMElement('ItemType', $category);
-				$Product->appendChild($ItemType);         
-			}
-			
-			
-			foreach ($catExplode as $categories) {
-				$ItemType = new DOMElement('ItemType', $categories);
-				$Product->appendChild($ItemType);
-			}
-			*/
-			
-			$ItemDimensions = new DOMElement('ItemDimensions');
-			$DescriptionData->appendChild($ItemDimensions);
-
-			//Definindo unidade de Medidas e Peso.
-			$Length = new DOMElement('Length' , $length_Prod);
-			$ItemDimensions->appendChild($Length);
-			$Length->setAttribute('unitOfMeasure', unMedida_IN);
-
-			$Width = new DOMElement('Width' , $width_Prod);
-			$ItemDimensions->appendChild($Width);
-			$Width->setAttribute('unitOfMeasure', unMedida_IN);
-
-			$Height = new DOMElement('Height' , $height_Prod);
-			$ItemDimensions->appendChild($Height);
-			$Height->setAttribute('unitOfMeasure', unMedida_IN);
-			
-			$Weight = new DOMElement('Weight' , $weight_Prod);
-			$ItemDimensions->appendChild($Weight);
-			$Weight->setAttribute('unitOfMeasure', unPeso_LB);
+					$msrp 		 = str_replace(',', '',number_format($product->getMsrp(),2));
 
 
-			$PackageDimensions = new DOMElement('PackageDimensions');
-			$DescriptionData->appendChild($PackageDimensions);
+					//Inicio Varias Mensagem ( amazon feed )
+					$Message = new DOMElement('Message');
+					$root->appendChild($Message);
 
-			//Definindo unidade de Medidas e Peso.
-			$Length = new DOMElement('Length' , $length_Pack);
-			$PackageDimensions->appendChild($Length);
-			$Length->setAttribute('unitOfMeasure', unMedida_IN);
+					$MessageID = new DOMElement('MessageID',$indice);
+					$Message->appendChild($MessageID);
+					$OperationType = new DOMElement('OperationType', op_update);
+					$Message->appendChild($OperationType);
+					$Product = new DOMElement('Product');
+					$Message->appendChild($Product);
 
-			$Width = new DOMElement('Width' , $width_Pack);
-			$PackageDimensions->appendChild($Width);
-			$Width->setAttribute('unitOfMeasure', unMedida_IN);
+					$Sku = new DOMElement('SKU', $sku);
+					$Product->appendChild($Sku);
 
-			$Height = new DOMElement('Height' , $height_Pack);
-			$PackageDimensions->appendChild($Height);
-			$Height->setAttribute('unitOfMeasure', unMedida_IN);
-			
-			$Weight = new DOMElement('Weight' , $weight_Pack);
-			$PackageDimensions->appendChild($Weight);
-			$Weight->setAttribute('unitOfMeasure', unPeso_LB);
+					$StandardProductID = new DOMElement('StandardProductID');
+					$Product->appendChild($StandardProductID);
 
-			$PackageWeight = new DOMElement('PackageWeight' , $weight_Pack);
-			$DescriptionData->appendChild($PackageWeight);
-			$PackageWeight->setAttribute('unitOfMeasure', unPeso_LB);
+					$asin = $product->getAsin();
 
-			$ShippingWeight = new DOMElement('ShippingWeight' , $weight_Pack);
-			$DescriptionData->appendChild($ShippingWeight);
-			$ShippingWeight->setAttribute('unitOfMeasure', unPeso_LB);
-			
-			$MSRP = new DOMElement('MSRP' , $msrp);
-			$DescriptionData->appendChild($MSRP);
-			$MSRP->setAttribute('currency', unMoeda_USD);
+					if ($asin != '') {
+						$Type = new DOMElement('Type', ASIN);
+						$StandardProductID->appendChild($Type);
 
-			$Manufacturer = new DOMElement('Manufacturer' , $manufacturer);
-			$DescriptionData->appendChild($Manufacturer);
-			
-			$MfrPartNumber = new DOMElement('MfrPartNumber' , $mfrPartNum);
-			$DescriptionData->appendChild($MfrPartNumber);
-			
-			$SearchTerms = new DOMElement('SearchTerms' , $searchTerms);
-			$DescriptionData->appendChild($SearchTerms);
+						$Value = new DOMElement('Value', $asin);
+						$StandardProductID->appendChild($Value);
+					}else{
+						$Type = new DOMElement('Type', UPC);
+						$StandardProductID->appendChild($Type);
 
-			/*
-			$contCat = 0;
-			foreach ($catExplode as $categories) {
-				$contCat++;
-			}
+						$Value = new DOMElement('Value', $upc);
+						$StandardProductID->appendChild($Value);
+					}
 
-			$ItemType = new DOMElement('ItemType', $catExplode[$contCat - NUM_1]);
-			$DescriptionData->appendChild($ItemType);
-			
-			
-			$ProductData = new DOMElement('ProductData');
-			$Product->appendChild($ProductData);
-			
-			$Home = new DOMElement('Home');
-			$ProductData->appendChild($Home);
+					$Condition = new DOMElement('Condition');
+					$Product->appendChild($Condition);
 
-			$ProductType = new DOMElement('ProductType');
-			$Home->appendChild($ProductType);
+					$ConditionType = new DOMElement('ConditionType', $condition);
+					$Condition->appendChild($ConditionType);
 
-			$FurnitureAndDecor = new DOMElement('FurnitureAndDecor');
-			$ProductType->appendChild($FurnitureAndDecor);
-			$ColorMap = new DOMElement('ColorMap');
-			$FurnitureAndDecor->appendChild($ColorMap);
-			$Material = new DOMElement('Material');
-			$FurnitureAndDecor->appendChild($Material);
-			$Shape = new DOMElement('Shape');
-			$FurnitureAndDecor->appendChild($Shape);
-			*/
+					$itemPackageQuant = $product->getData('item_package_quantity');
+					if ($itemPackageQuant != '') {
 
-			/*
-			
-			$img = Mage::helper('catalog/image')->init($product, 'image');
-			echo "===============================================================================";
-			echo ("<br>Produto salvo: ".
-			 "<br>SKU: ".$sku.
-			 "<br>Nome: ".$name.
-			 "<br>Preço: ".$price.
-			 "<br>Descrição: ".$description.
-			 "<br>Descrição Curta: ".$shortDesc.
-			 "<br>Img URL Base: <a href='".$img->resize(500,500)."'>Img Base</a>".
-			 "<br>Img URL Thumbnail: <a href='".$img->resize(50,50)."'>Img Thumbnail</a>".
-			 "<br>Img URL Small: <a href='".$img->resize(100,100)."'>Img Small</a><br>");
-			 */
+						$NumberOfItems = new DOMElement('NumberOfItems', $itemPackageQuant);
+						$Product->appendChild($NumberOfItems);
+					}
 
+
+					$DescriptionData = new DOMElement('DescriptionData');
+					$Product->appendChild($DescriptionData);
+
+					$Title = new DOMElement('Title', $name);
+					$DescriptionData->appendChild($Title);
+
+					$Brand = new DOMElement('Brand', $brand);
+					$DescriptionData->appendChild($Brand);
+
+					$Description = new DOMElement('Description' , $res);
+					$DescriptionData->appendChild($Description);
+
+					$ItemDimensions = new DOMElement('ItemDimensions');
+					$DescriptionData->appendChild($ItemDimensions);
+
+					//Definindo unidade de Medidas e Peso.
+					$Length = new DOMElement('Length' , $length_Prod);
+					$ItemDimensions->appendChild($Length);
+					$Length->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Width = new DOMElement('Width' , $width_Prod);
+					$ItemDimensions->appendChild($Width);
+					$Width->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Height = new DOMElement('Height' , $height_Prod);
+					$ItemDimensions->appendChild($Height);
+					$Height->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Weight = new DOMElement('Weight' , $weight_Prod);
+					$ItemDimensions->appendChild($Weight);
+					$Weight->setAttribute('unitOfMeasure', unPeso_LB);
+
+
+					$PackageDimensions = new DOMElement('PackageDimensions');
+					$DescriptionData->appendChild($PackageDimensions);
+
+					//Definindo unidade de Medidas e Peso.
+					$Length = new DOMElement('Length' , $length_Pack);
+					$PackageDimensions->appendChild($Length);
+					$Length->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Width = new DOMElement('Width' , $width_Pack);
+					$PackageDimensions->appendChild($Width);
+					$Width->setAttribute('unitOfMeasure', unMedida_IN);
+
+					$Height = new DOMElement('Height' , $height_Pack);
+					$PackageDimensions->appendChild($Height);
+					$Height->setAttribute('unitOfMeasure', unMedida_IN);
+
+
+					$ShippingWeight = new DOMElement('ShippingWeight' , $weight_Pack);
+					$DescriptionData->appendChild($ShippingWeight);
+					$ShippingWeight->setAttribute('unitOfMeasure', unPeso_LB);
+
+					$MSRP = new DOMElement('MSRP' , $msrp);
+					$DescriptionData->appendChild($MSRP);
+					$MSRP->setAttribute('currency', unMoeda_USD);
+
+					$Manufacturer = new DOMElement('Manufacturer' , $manufacturer);
+					$DescriptionData->appendChild($Manufacturer);
+
+					$MfrPartNumber = new DOMElement('MfrPartNumber' , $mfrPartNum);
+					$DescriptionData->appendChild($MfrPartNumber);
+
+					$catgory = Mage::getModel('catalog/product')->load($product->getId());
+					$catName = '';
+					$catgory = $product->getCategoryIds();
+					foreach ($catgory as $category_id) {
+						$_cat = Mage::getModel('catalog/category')->load($category_id) ;
+						$catName = $_cat->getData('amazon_category');
+
+					}
+
+					$catUltima = explode('>', $catName);
+					$contCat = 0;
+					foreach ($catUltima as $categories){
+						$contCat++;
+					}
+					$ItemType = new DOMElement('ItemType', $catUltima[$contCat -  NUM_1]);
+					$DescriptionData->appendChild($ItemType);
+				}
 			}
 		}
+
 		$dateSave = date("YmdHms");
-		$doc->save("c:/tmp/ProductXML-".$dateSave.".xml");
-		return $doc->savexml();
+		$doc->save("log/ProductXML-".$dateSave.".xml");
+
+		$EnviaNovoFeed = new EnviaNovoFeed();
+		$feedID = $EnviaNovoFeed->recebeXML($doc->savexml() , '_POST_PRODUCT_DATA_' );
+		echo 'Request Feed ID Produto: ' . $feedID;
+		echo "<br>";
+		$feedType = 'Produto';
+		$relatorioFeed = new ResponseFeed();
+		$retornoFeed = $relatorioFeed->getResponseFeed($feedID,$feedType);
+		return $feedID;
 	}
 
-	public function geraStock()
+	function geraStock()
 	{
-		include_once('helper/constantes.php');
-		require_once('../app/Mage.php');
-		umask(0);
-		Mage::app();
-
+		echo "START - " . date('Y-m-d H:i:s Z') . "<br>";
 		$doc = new DomDocument('1.0' , 'utf-8');
 		$doc->formatOutput = true;
 
@@ -324,20 +460,26 @@ class GeraXML
 		#############################################################
 		# Definindo uma colletions para pesquisa de produto MAGENTO #
 		#############################################################
+		//$productSkuString = 'TD920309-01L';
+		$date = now('Y-m-d 00:00:00');
+		$productIds = explode(',', $productSkuString);
 		$collection = Mage::getModel('catalog/product')
 		->getCollection()
 		->addAttributeToSort('created_at', 'DESC')
+		->addAttributeToFilter('updated_at',array('gteq' => $date))
+		//->addAttributeToFilter('sku', array('in' => $productIds))
 		->addAttributeToFilter('amazon_feed' , '1')
-		->addAttributeToSelect('*')->setPageSize(NUM_100);
+		->addAttributeToFilter('status' , '1')
+		->addAttributeToSelect('*')->setPageSize(10000);
 		$collection->getSelect();
 
 		$indice = 0;
 
-		for ($i=1; $i <= $collection->getLastPageNumber(); $i++) { 
+		for ($i=1; $i <= $collection->getLastPageNumber(); $i++) {
 			if ($collection->isLoaded()) {
 				$collection->clear();
 				$collection->setPage($i);
-				$collection->setPageSize(NUM_100);
+				$collection->setPageSize(10000);
 			}
 
 			foreach ($collection as $product) {
@@ -351,6 +493,9 @@ class GeraXML
 				->loadByProduct($product->getID())->getQty();
 
 				if ($amazonFlag == 0) {
+					$stocklevel = 0;
+				}
+				if ($stocklevel <= 0) {
 					$stocklevel = 0;
 				}
 
@@ -372,25 +517,39 @@ class GeraXML
 
 				$Quantity = new DOMElement('Quantity' , $stocklevel);
 				$Inventory->appendChild($Quantity);
-				
-				$FulfillmentLatency = new DOMElement('FulfillmentLatency' , NUM_5);
-				$Inventory->appendChild($FulfillmentLatency);
 
+				/**
+				 * @todo pegar handling_time( magento )
+				 */
+
+				if ($product->getAttributeText('handling_time')) {
+					$handling_time = $product->getAttributeText('handling_time');
+					$FulfillmentLatency = new DOMElement('FulfillmentLatency' , $handling_time);
+					$Inventory->appendChild($FulfillmentLatency);
+				}else{
+					$FulfillmentLatency = new DOMElement('FulfillmentLatency' , NUM_5);
+					$Inventory->appendChild($FulfillmentLatency);
+				}
 			}
-
 		}
 		$dateSave = date("YmdHms");
 		$doc->save("log/ProductStockXML-".$dateSave.".xml");
-		return $doc->savexml();
+
+		$EnviaNovoFeed = new EnviaNovoFeed();
+		$feedID = $EnviaNovoFeed->recebeXML($doc->savexml() , '_POST_INVENTORY_AVAILABILITY_DATA_' );
+		echo 'Request Feed ID Stock : ' . $feedID;
+		echo "<br>";
+		echo "STOP - " . date('Y-m-d H:i:s Z') . "<br>";
+		echo "START RESPOSTA- " . date('Y-m-d H:i:s Z') . "<br>";
+		$feedType = 'Stock';
+		$relatorioFeed = new ResponseFeed();
+		$retornoFeed = $relatorioFeed->getResponseFeed($feedID,$feedType);
+		echo "STOP RESPOSTA- " . date('Y-m-d H:i:s Z') . "<br>";
+		return $feedID;
 	}
 
-	public function geraPrice()
+	function geraPrice()
 	{
-		include_once('helper/constantes.php');
-		require_once('../app/Mage.php');
-		umask(0);
-		Mage::app();
-
 		$doc = new DomDocument('1.0' , 'utf-8');
 		$doc->formatOutput = true;
 
@@ -416,11 +575,18 @@ class GeraXML
 		#############################################################
 		# Definindo uma colletions para pesquisa de produto MAGENTO #
 		#############################################################
+		//$productSkuString = 'TD920309-01L';
+		$date = now('Y-m-d 00:00:00');
+		$productIds = explode(',', $productSkuString);
 		$collection = Mage::getModel('catalog/product')
-			->getCollection()
-			->addAttributeToSort('created_at', 'DESC')
-			->addAttributeToFilter('amazon_feed' , '1')
-			->addAttributeToSelect('*')->setPageSize(NUM_100);
+		->getCollection()
+		->addAttributeToSort('created_at', 'DESC')
+		->addAttributeToFilter('updated_at',array('gteq' => $date))
+		//->addAttributeToFilter('sku', array('in' => $productIds))
+		->addAttributeToFilter('amazon_feed' , '1')
+		->addAttributeToFilter('automate_pricing' , array('eq' => '0'))
+		->addAttributeToFilter('status' , '1')
+		->addAttributeToSelect('*')->setPageSize(10000);
 		$collection->getSelect();
 
 		$indice = 0;
@@ -428,14 +594,14 @@ class GeraXML
 			if ($collection->isLoaded()) {
 				$collection->clear();
 				$collection->setPage($i);
-				$collection->setPageSize(NUM_100);
+				$collection->setPageSize(10000);
 			}
 			foreach ($collection as $product) {
 				$indice++; //Contador
 
 				//Atributos
 				$sku        = $product->getData('sku');
-				$price 		= $product->getData('amazon_price');
+				$price 		= str_replace(',', '', number_format($product->getData('amazon_price'),2));
 
 				//Inicio Varias Mensagem ( amazon feed )
 				$Message = new DOMElement('Message');
@@ -461,17 +627,20 @@ class GeraXML
 
 		$dateSave = date("YmdHms");
 		$doc->save("log/ProductPriceXML-".$dateSave.".xml");
-		return $doc->savexml();
+
+		$EnviaNovoFeed = new EnviaNovoFeed();
+		$feedID = $EnviaNovoFeed->recebeXML($doc->savexml() , '_POST_PRODUCT_PRICING_DATA_' );
+		echo 'Request Feed ID Price : ' . $feedID;
+		echo "<br>";
+		$feedType = 'Preço';
+		$relatorioFeed = new ResponseFeed();
+		$retornoFeed = $relatorioFeed->getResponseFeed($feedID,$feedType);
+		return $feedID;
+
 	}
 
-	public function geraImg()
+	function geraImg()
 	{
-
-	 	include_once('helper/constantes.php');
-		require_once('../app/Mage.php');
-		umask(0);
-		Mage::app();
-
 		$doc = new DomDocument('1.0' , 'utf-8');
 		$doc->formatOutput = true;
 
@@ -497,20 +666,26 @@ class GeraXML
 		#############################################################
 		# Definindo uma colletions para pesquisa de produto MAGENTO #
 		#############################################################
+		//$productSkuString = 'TD920309-01L';
+		$date = now('Y-m-d 00:00:00');
+		$productIds = explode(',', $productSkuString);
 		$collection = Mage::getModel('catalog/product')
-			->getCollection()
-			->addAttributeToSort('created_at', 'DESC')
-			->addAttributeToFilter('amazon_feed' , '1')
-			->addAttributeToSelect('*')->setPageSize(NUM_100);
+		->getCollection()
+		->addAttributeToSort('created_at', 'DESC')
+		->addAttributeToFilter('updated_at',array('gteq' => $date))
+		//->addAttributeToFilter('sku', array('in' => $productIds))
+		->addAttributeToFilter('amazon_feed' , '1')
+		->addAttributeToFilter('status' , '1')
+		->addAttributeToSelect('*')->setPageSize(10000);
 		$collection->getSelect();
 		//$collection->load();
-				
+
 		$indice = 0;
-		for ($i=1; $i <= $collection->getLastPageNumber(); $i++) {
+		for ($i=1;$i <= $collection->getLastPageNumber(); $i++) {
 			if ($collection->isLoaded()) {
 				$collection->clear();
 				$collection->setPage($i);
-				$collection->setPageSize(NUM_100);
+				$collection->setPageSize(10000);
 			}
 			foreach ($collection as $product) {
 				$indice++; //Contador
@@ -540,25 +715,223 @@ class GeraXML
 				$ProductImg->appendChild($ImageLocation);
 
 			}
-	 	}
-	 	$dateSave = date("YmdHms");
+		}
+		$dateSave = date("YmdHms");
 		$doc->save("log/ProductImgXML-".$dateSave.".xml");
-	 	return $doc->savexml();
+
+		$EnviaNovoFeed = new EnviaNovoFeed();
+		$feedID = $EnviaNovoFeed->recebeXML($doc->savexml() , '_POST_PRODUCT_IMAGE_DATA_' );
+		echo 'Request Feed ID Imagem : ' . $feedID;
+		echo "<br>";
+		$feedType = 'Imagem';
+		$relatorioFeed = new ResponseFeed();
+		$retornoFeed = $relatorioFeed->getResponseFeed($feedID,$feedType);
+		return $feedID;
+
 	}
 
-	/**
-	* @todo Fazer Chamada para Cliente Amazon
-	*/
-	 
+	function geraFreeShipping()
+	{
+		$doc = new DomDocument('1.0' , 'utf-8');
+		$doc->formatOutput = true;
+
+		$root = $doc->appendChild($doc->createElement('AmazonEnvelope'));
+		$root->appendChild($doc->createAttribute('xmlns:xsi'))
+		->appendChild($doc->createTextNode('http://www.w3.org/2001/XMLSchema-instance'));
+		$root->appendChild($doc->createAttribute('xsi:noNamespaceSchemaLocation'))
+		->appendChild($doc->createTextNode('amzn-envelope.xsd'));
+
+
+		$head = new DOMElement('Header');
+		$root->appendChild($head);
+
+		$DocumentVersion = new DOMElement('DocumentVersion','1.01');
+		$head->appendChild($DocumentVersion);
+
+		$MerchantIdentifier = new DOMElement('MerchantIdentifier','A147A61KSAHFTB');
+		$head->appendChild($MerchantIdentifier);
+
+		$MessageType = new DOMElement('MessageType','Override');
+		$root->appendChild($MessageType);
+
+		#############################################################
+		# Definindo uma colletions para pesquisa de produto MAGENTO #
+		#############################################################
+		//$productSkuString = 'TD920309-01L';
+		$date = now('Y-m-d 00:00:00');
+		$productIds = explode(',', $productSkuString);
+		$collection = Mage::getModel('catalog/product')
+		->getCollection()
+		->addAttributeToSort('created_at', 'DESC')
+		->addAttributeToFilter('updated_at',array('gteq' => $date))
+		//->addAttributeToFilter('sku', array('in' => $productIds))
+		->addAttributeToFilter('amazon_feed' , '1')
+		->addAttributeToFilter('status' , '1')
+		->addAttributeToSelect('*')->setPageSize(10000);
+		$collection->getSelect();
+		//$collection->load();
+
+		$indice = 0;
+		for ($i=1;$i <= $collection->getLastPageNumber(); $i++) {
+			if ($collection->isLoaded()) {
+				$collection->clear();
+				$collection->setPage($i);
+				$collection->setPageSize(10000);
+			}
+			foreach ($collection as $product) {
+				$indice++; //Contador
+
+				$sku                = $product->getSku();
+
+				$Message = new DOMElement('Message');
+				$root->appendChild($Message);
+
+				$MessageID = new DOMElement('MessageID',$indice);
+				$Message->appendChild($MessageID);
+
+				if($product->getData('free_shipping_amazon') == NUM_1){
+					$OperationType = new DOMElement('OperationType',op_update);
+					$Message->appendChild($OperationType);
+				}else{
+					$OperationType = new DOMElement('OperationType',op_delete);
+					$Message->appendChild($OperationType);
+				}
+
+				$Override = new DOMElement('Override');
+				$Message->appendChild($Override);
+
+				$Sku = new DOMElement('SKU', $sku);
+				$Override->appendChild($Sku);
+
+				$ShippingOverride = new DOMElement('ShippingOverride');
+				$Override->appendChild($ShippingOverride);
+
+				$ShipOption = new DOMElement('ShipOption', 'Std Cont US Street Addr');
+				$ShippingOverride->appendChild($ShipOption);
+
+
+				$Type = new DOMElement('Type', 'Exclusive');
+				$ShippingOverride->appendChild($Type);
+
+
+				$ShipAmount = new DOMElement('ShipAmount', '0.00');
+				$ShippingOverride->appendChild($ShipAmount);
+				$ShipAmount->setAttribute('currency', unMoeda_USD);
+			}
+		}
+		$dateSave = date("YmdHms");
+		$doc->save("log/ProductFreeShipping-".$dateSave.".xml");
+		$EnviaNovoFeed = new EnviaNovoFeed();
+		$feedID = $EnviaNovoFeed->recebeXML($doc->savexml() , '_POST_PRODUCT_OVERRIDES_DATA_' );
+		echo 'Request Feed ID Free Shipping : ' . $feedID;
+		echo "<br>";
+		$feedType = 'FreeShipping';
+		$relatorioFeed = new ResponseFeed();
+		$retornoFeed = $relatorioFeed->getResponseFeed($feedID,$feedType);
+		return $feedID;
+	}
+
+	function removeProduct()
+	{
+		$doc = new DomDocument('1.0' , 'utf-8');
+		$doc->formatOutput = true;
+
+		$root = $doc->appendChild($doc->createElement('AmazonEnvelope'));
+		$root->appendChild($doc->createAttribute('xmlns:xsi'))
+		->appendChild($doc->createTextNode('http://www.w3.org/2001/XMLSchema-instance'));
+		$root->appendChild($doc->createAttribute('xsi:noNamespaceSchemaLocation'))
+		->appendChild($doc->createTextNode('amzn-envelope.xsd'));
+
+
+		$head = new DOMElement('Header');
+		$root->appendChild($head);
+
+		$DocumentVersion = new DOMElement('DocumentVersion','1.01');
+		$head->appendChild($DocumentVersion);
+
+		$MerchantIdentifier = new DOMElement('MerchantIdentifier','A147A61KSAHFTB');
+		$head->appendChild($MerchantIdentifier);
+
+		$MessageType = new DOMElement('MessageType','Product');
+		$root->appendChild($MessageType);
+
+		$PurgeAndReplace = new DOMElement('PurgeAndReplace','false');
+		$root->appendChild($PurgeAndReplace);
+
+		#############################################################
+		# Definindo uma colletions para pesquisa de produto MAGENTO #
+		#############################################################
+		//$productSkuString = 'TD920309-01L';
+
+		$date = now('Y-m-d 00:00:00');
+
+		$productIds = explode(',', $productSkuString);
+		$collection = Mage::getModel('catalog/product')
+		->getCollection()
+		->addAttributeToFilter('updated_at',array('gteq' => $date))
+		//->addAttributeToFilter('sku', array('in' => $productIds))
+		->addAttributeToFilter('amazon_feed' , '0')
+		->addAttributeToFilter('status' , '1')
+		->addAttributeToSelect('*')->setPageSize(1000);
+		$collection->getSelect();
+		//$collection->load();
+
+		$indice = 0;
+		for ($i=1; $i <= $collection->getLastPageNumber(); $i++) {
+			if ($collection->isLoaded()) {
+				$collection->clear();
+				$collection->setPage($i);
+				$collection->setPageSize(1000);
+			}
+
+			foreach ($collection as $product) {
+				$indice++; //Contador
+
+				//Recebe os produtos
+				$sku  		  = $product->getSku();
+
+				//Inicio Varias Mensagem ( amazon feed )
+				$Message = new DOMElement('Message');
+				$root->appendChild($Message);
+
+				$MessageID = new DOMElement('MessageID',$indice);
+				$Message->appendChild($MessageID);
+
+				$OperationType = new DOMElement('OperationType', op_delete);
+				$Message->appendChild($OperationType);
+				$Product = new DOMElement('Product');
+				$Message->appendChild($Product);
+
+				$Sku = new DOMElement('SKU', $sku);
+				$Product->appendChild($Sku);
+			}
+		}
+
+		$dateSave = date("YmdHms");
+		$doc->save("log/ProductDelete-".$dateSave.".xml");
+		$EnviaNovoFeed = new EnviaNovoFeed();
+		$feedID = $EnviaNovoFeed->recebeXML($doc->savexml() , '_POST_PRODUCT_DATA_' );
+		echo 'Request Feed ID Delete : ' . $feedID;
+		echo "<br>";
+		$feedType = 'Delete';
+		$relatorioFeed = new ResponseFeed();
+		$retornoFeed = $relatorioFeed->getResponseFeed($feedID,$feedType);
+		return $feedID;
+	}
 }
 
+/*
+	$GeraXML       = new GeraXML;
+	
+	$returnPrice   = $GeraXML->geraPrice();
+
+	$returnProduto = $GeraXML->geraProduto();
 
 
-$GeraXML = new GeraXML;
+	$returnPrice   = $GeraXML->geraPrice();
 
-echo $GeraXML->geraProduto();
-//$GeraXML->geraStock();
-//$GeraXML->geraPrice();
-//$GeraXML->geraImg();
+	$returnStock   = $GeraXML->geraStock();
 
-?>
+	$GeraXML->geraImg();
+
+*/
